@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
+
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
@@ -8,13 +8,10 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:get/get.dart';
+import 'ocr_controller.dart';
+import 'ocr_models.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,350 +49,12 @@ class FreeLensOcrApp extends StatelessWidget {
   }
 }
 
-class OcrHistoryItem {
-  final String id;
-  final int timestampMs;
-  final String preview;
-  final String fullText;
-  final String imagePath;
-
-  OcrHistoryItem({
-    required this.id,
-    required this.timestampMs,
-    required this.preview,
-    required this.fullText,
-    required this.imagePath,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'timestampMs': timestampMs,
-    'preview': preview,
-    'fullText': fullText,
-    'imagePath': imagePath,
-  };
-
-  static OcrHistoryItem fromJson(Map<String, dynamic> j) => OcrHistoryItem(
-    id: j['id'] as String,
-    timestampMs: (j['timestampMs'] as num).toInt(),
-    preview: (j['preview'] as String?) ?? '',
-    fullText: (j['fullText'] as String?) ?? '',
-    imagePath: (j['imagePath'] as String?) ?? '',
-  );
-}
-
-class OcrStats {
-  final int totalScans;
-  final int totalCharacters;
-  final int? lastScanAtMs;
-
-  OcrStats({
-    required this.totalScans,
-    required this.totalCharacters,
-    required this.lastScanAtMs,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'totalScans': totalScans,
-    'totalCharacters': totalCharacters,
-    'lastScanAtMs': lastScanAtMs,
-  };
-
-  static OcrStats fromJson(Map<String, dynamic> j) => OcrStats(
-    totalScans: (j['totalScans'] as num?)?.toInt() ?? 0,
-    totalCharacters: (j['totalCharacters'] as num?)?.toInt() ?? 0,
-    lastScanAtMs: (j['lastScanAtMs'] as num?)?.toInt(),
-  );
-
-  static OcrStats empty() =>
-      OcrStats(totalScans: 0, totalCharacters: 0, lastScanAtMs: null);
-
-  OcrStats copyWith({
-    int? totalScans,
-    int? totalCharacters,
-    int? lastScanAtMs,
-  }) => OcrStats(
-    totalScans: totalScans ?? this.totalScans,
-    totalCharacters: totalCharacters ?? this.totalCharacters,
-    lastScanAtMs: lastScanAtMs ?? this.lastScanAtMs,
-  );
-}
-
-class OcrHomePage extends StatefulWidget {
+class OcrHomePage extends StatelessWidget {
   const OcrHomePage({super.key});
 
   @override
-  State<OcrHomePage> createState() => _OcrHomePageState();
-}
-
-class _OcrHomePageState extends State<OcrHomePage>
-    with TickerProviderStateMixin {
-  // Storage keys matching the web style/versioning
-  static const _kHistoryKey = 'ocr_history_v1';
-  static const _kStatsKey = 'ocr_stats_v1';
-
-  final _picker = ImagePicker();
-  final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
-
-  CameraController? _camera;
-  List<CameraDescription> _cameras = [];
-  bool _cameraReady = false;
-
-  bool _isExtracting = false;
-  String? _error;
-
-  // Current result overlay
-  String? _currentText;
-  String? _currentImagePath;
-
-  // History / stats
-  List<OcrHistoryItem> _history = [];
-  OcrStats _stats = OcrStats.empty();
-
-  // History drawer
-  bool _historyOpen = false;
-  final _historySearch = TextEditingController();
-
-  // Scan overlay animation
-  late final AnimationController _scanCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _scanCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
-
-    _bootstrap();
-  }
-
-  @override
-  void dispose() {
-    _historySearch.dispose();
-    _scanCtrl.dispose();
-    _camera?.dispose();
-    _recognizer.close();
-    super.dispose();
-  }
-
-  Future<void> _bootstrap() async {
-    await _loadLocal();
-    await _ensurePermissions();
-    await _initCamera();
-  }
-
-  Future<void> _ensurePermissions() async {
-    // Camera permission
-    final cam = await Permission.camera.request();
-    if (!cam.isGranted) {
-      setState(
-        () => _error = 'Camera permission is required for live scanning.',
-      );
-    }
-
-    // Gallery pick permission (best-effort; Android 13+ uses picker)
-    await Permission.photos.request();
-    await Permission.storage.request();
-  }
-
-  Future<void> _initCamera() async {
-    try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() {
-          _cameraReady = false;
-          _error = 'No camera found on this device.';
-        });
-        return;
-      }
-
-      final back = _cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => _cameras.first,
-      );
-
-      final controller = CameraController(
-        back,
-        ResolutionPreset.high,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420,
-      );
-
-      await controller.initialize();
-
-      if (!mounted) return;
-      setState(() {
-        _camera = controller;
-        _cameraReady = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _cameraReady = false;
-        _error = 'Failed to initialize camera: $e';
-      });
-    }
-  }
-
-  Future<void> _loadLocal() async {
-    final sp = await SharedPreferences.getInstance();
-
-    final histRaw = sp.getString(_kHistoryKey);
-    if (histRaw != null && histRaw.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(histRaw);
-        if (decoded is List) {
-          _history = decoded
-              .whereType<Map>()
-              .map((m) => OcrHistoryItem.fromJson(Map<String, dynamic>.from(m)))
-              .toList()
-              .reversed
-              .toList(); // newest first
-        }
-      } catch (_) {}
-    }
-
-    final statsRaw = sp.getString(_kStatsKey);
-    if (statsRaw != null && statsRaw.trim().isNotEmpty) {
-      try {
-        _stats = OcrStats.fromJson(
-          Map<String, dynamic>.from(jsonDecode(statsRaw)),
-        );
-      } catch (_) {}
-    }
-
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _persistLocal() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(
-      _kHistoryKey,
-      jsonEncode(_history.reversed.map((e) => e.toJson()).toList()),
-    );
-    await sp.setString(_kStatsKey, jsonEncode(_stats.toJson()));
-  }
-
-  Future<String> _saveImageToAppDir(File src) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final imagesDir = Directory(p.join(dir.path, 'ocr_images'));
-    if (!imagesDir.existsSync()) imagesDir.createSync(recursive: true);
-
-    final id = DateTime.now().millisecondsSinceEpoch.toString();
-    final ext = p.extension(src.path).isNotEmpty
-        ? p.extension(src.path)
-        : '.jpg';
-    final destPath = p.join(imagesDir.path, 'scan_$id$ext');
-
-    await src.copy(destPath);
-    return destPath;
-  }
-
-  Future<void> _extractFromFile(File file) async {
-    setState(() {
-      _isExtracting = true;
-      _error = null;
-    });
-
-    try {
-      final savedPath = await _saveImageToAppDir(file);
-
-      final input = InputImage.fromFilePath(savedPath);
-      final recognized = await _recognizer.processImage(input);
-      final text = recognized.text.trim();
-
-      final finalText = text.isEmpty ? 'No text detected' : text;
-      final preview = finalText.length > 80
-          ? '${finalText.substring(0, 80)}…'
-          : finalText;
-
-      final item = OcrHistoryItem(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        timestampMs: DateTime.now().millisecondsSinceEpoch,
-        preview: preview,
-        fullText: finalText,
-        imagePath: savedPath,
-      );
-
-      _history.insert(0, item);
-
-      _stats = _stats.copyWith(
-        totalScans: _stats.totalScans + 1,
-        totalCharacters: _stats.totalCharacters + finalText.length,
-        lastScanAtMs: DateTime.now().millisecondsSinceEpoch,
-      );
-
-      await _persistLocal();
-
-      setState(() {
-        _currentText = finalText;
-        _currentImagePath = savedPath;
-      });
-    } catch (e) {
-      setState(
-        () => _error =
-            'Failed to extract text. Please ensure the image is clear.',
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isExtracting = false);
-      }
-    }
-  }
-
-  Future<void> _capture() async {
-    if (_camera == null || !_cameraReady) return;
-    if (_isExtracting) return;
-
-    try {
-      final c = _camera!;
-      if (c.value.isTakingPicture) return;
-
-      final x = await c.takePicture();
-      await _extractFromFile(File(x.path));
-    } catch (e) {
-      setState(() => _error = 'Capture failed: $e');
-    }
-  }
-
-  Future<void> _pickFromGallery() async {
-    if (_isExtracting) return;
-    try {
-      final x = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 92,
-      );
-      if (x == null) return;
-      await _extractFromFile(File(x.path));
-    } catch (e) {
-      setState(() => _error = 'Failed to pick image: $e');
-    }
-  }
-
-  void _openHistory() {
-    setState(() {
-      _historyOpen = true;
-      _historySearch.text = '';
-    });
-  }
-
-  void _closeHistory() => setState(() => _historyOpen = false);
-
-  List<OcrHistoryItem> get _filteredHistory {
-    final q = _historySearch.text.trim().toLowerCase();
-    if (q.isEmpty) return _history;
-    return _history
-        .where(
-          (h) =>
-              h.preview.toLowerCase().contains(q) ||
-              h.fullText.toLowerCase().contains(q),
-        )
-        .toList();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final controller = Get.put(OcrController());
     final mq = MediaQuery.of(context);
     final w = mq.size.width;
     final h = mq.size.height;
@@ -405,361 +64,361 @@ class _OcrHomePageState extends State<OcrHomePage>
     final viewfinderH = min(viewfinderW * (4 / 3), h * 0.62);
 
     return Scaffold(
-      body: Stack(
-        children: [
-          // Background base + subtle radial “glow” like the Tailwind app
-          Container(decoration: const BoxDecoration(color: Color(0xFF020617))),
-          Positioned(
-            top: -220,
-            left: -180,
-            child: Container(
-              width: 520,
-              height: 520,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [Color(0x3310B981), Color(0x00020617)],
-                ),
-              ),
+      body: Obx(
+        () => Stack(
+          children: [
+            // Background base + subtle radial “glow” like the Tailwind app
+            Container(
+              decoration: const BoxDecoration(color: Color(0xFF020617)),
             ),
-          ),
-
-          // Camera preview (behind everything)
-          if (_cameraReady && _camera != null)
-            Positioned.fill(
-              child: IgnorePointer(
-                // Equivalent to pointer-events:none on iframe/video
-                ignoring: true,
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: _camera!.value.previewSize?.height ?? w,
-                    height: _camera!.value.previewSize?.width ?? h,
-                    child: CameraPreview(_camera!),
-                  ),
-                ),
-              ),
-            )
-          else
-            Positioned.fill(
-              child: Center(
-                child: Text(
-                  _error ?? 'Camera loading…',
-                  style: const TextStyle(color: Color(0xFF94A3B8)), // slate-400
-                ),
-              ),
-            ),
-
-          // Top header
-          SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x3310B981),
-                          blurRadius: 18,
-                          offset: Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.auto_awesome,
-                      color: Colors.black,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Free Lens OCR',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.1,
-                      ),
-                    ),
-                  ),
-                  _HeaderIconButton(
-                    tooltip: 'History',
-                    icon: Icons.history,
-                    badge: _history.isNotEmpty,
-                    onTap: _openHistory,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Scan overlay (frame + scan line)
-          Center(
-            child: SizedBox(
-              width: viewfinderW,
-              height: viewfinderH,
-              child: Stack(
-                children: [
-                  // Semi-transparent glass background
-                  Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0x660B1220),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(
-                          color: const Color(0x3310B981),
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Corner frame painter
-                  Positioned.fill(
-                    child: CustomPaint(
-                      painter: _ScanFramePainter(
-                        color: const Color(0xFF10B981),
-                        radius: 22,
-                        stroke: 2.2,
-                      ),
-                    ),
-                  ),
-
-                  // Animated scan line
-                  AnimatedBuilder(
-                    animation: _scanCtrl,
-                    builder: (context, _) {
-                      final t = _scanCtrl.value;
-                      final top = lerpDouble(14, viewfinderH - 18, t)!;
-                      return Positioned(
-                        left: 16,
-                        right: 16,
-                        top: top,
-                        child: Container(
-                          height: 2,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(99),
-                            gradient: const LinearGradient(
-                              colors: [
-                                Color(0x0010B981),
-                                Color(0xFF10B981),
-                                Color(0x0010B981),
-                              ],
-                            ),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x5510B981),
-                                blurRadius: 12,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-
-                  // Hint text
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 12,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0x99020617),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: const Color(0x22334B),
-                            width: 1,
-                          ),
-                        ),
-                        child: const Text(
-                          'Align text inside frame • Tap shutter to scan',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFFCBD5E1),
-                          ), // slate-300
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Bottom controls (upload + shutter)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
-                child: Row(
-                  children: [
-                    _RoundAction(
-                      icon: Icons.photo_library_outlined,
-                      size: 52,
-                      onTap: _pickFromGallery,
-                    ),
-                    const Spacer(),
-                    _ShutterButton(disabled: _isExtracting, onTap: _capture),
-                    const Spacer(),
-                    const SizedBox(
-                      width: 52,
-                    ), // keep symmetry like the web layout
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          // Watermark-like error banner (web shows inline errors)
-          if (_error != null)
             Positioned(
-              left: 16,
-              right: 16,
-              top: 86,
+              top: -220,
+              left: -180,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0B1220),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: const Color(0x33EF4444),
-                    width: 1.2,
+                width: 520,
+                height: 520,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [Color(0x3310B981), Color(0x00020617)],
                   ),
                 ),
+              ),
+            ),
+
+            // Camera preview (behind everything)
+            if (controller.cameraReady.value && controller.camera.value != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  // Equivalent to pointer-events:none on iframe/video
+                  ignoring: true,
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width:
+                          controller.camera.value!.value.previewSize?.height ??
+                          w,
+                      height:
+                          controller.camera.value!.value.previewSize?.width ??
+                          h,
+                      child: CameraPreview(controller.camera.value!),
+                    ),
+                  ),
+                ),
+              )
+            else
+              Positioned.fill(
+                child: Center(
+                  child: Text(
+                    controller.error.value ?? 'Camera loading…',
+                    style: const TextStyle(
+                      color: Color(0xFF94A3B8),
+                    ), // slate-400
+                  ),
+                ),
+              ),
+
+            // Top header
+            SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.error_outline,
-                      color: Color(0xFFEF4444),
-                      size: 18,
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x3310B981),
+                            blurRadius: 18,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.auto_awesome,
+                        color: Colors.black,
+                        size: 20,
+                      ),
                     ),
                     const SizedBox(width: 10),
-                    Expanded(
+                    const Expanded(
                       child: Text(
-                        _error!,
-                        style: const TextStyle(
-                          color: Color(0xFFFCA5A5),
-                          fontSize: 13,
+                        'Free Lens OCR',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
                         ),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => setState(() => _error = null),
-                      icon: const Icon(
-                        Icons.close,
-                        size: 18,
-                        color: Color(0xFF94A3B8),
-                      ),
-                      splashRadius: 18,
+                    _HeaderIconButton(
+                      tooltip: 'History',
+                      icon: Icons.history,
+                      badge: controller.history.isNotEmpty,
+                      onTap: controller.openHistory,
                     ),
                   ],
                 ),
               ),
             ),
 
-          // Result panel overlay (matches the web bottom overlay)
-          if (_currentText != null && _currentImagePath != null)
-            _ResultOverlay(
-              text: _currentText!,
-              imagePath: _currentImagePath!,
-              onClose: () => setState(() {
-                _currentText = null;
-                _currentImagePath = null;
-              }),
-              onCopy: () async {
-                await Clipboard.setData(ClipboardData(text: _currentText!));
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Copied to clipboard'),
-                    duration: Duration(milliseconds: 900),
-                  ),
-                );
-              },
-            ),
-
-          // History drawer (right-side slide, like the web)
-          _HistoryDrawer(
-            open: _historyOpen,
-            controller: _historySearch,
-            items: _filteredHistory,
-            onClose: _closeHistory,
-            onPick: (item) {
-              setState(() {
-                _currentText = item.fullText;
-                _currentImagePath = item.imagePath;
-                _historyOpen = false;
-              });
-            },
-            onClearAll: () async {
-              setState(() {
-                _history.clear();
-              });
-              _stats = OcrStats.empty();
-              await _persistLocal();
-              if (mounted) setState(() {});
-            },
-          ),
-
-          // Processing overlay
-          if (_isExtracting)
-            Positioned.fill(
-              child: Container(
-                color: const Color(0x99020617),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0B1220),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: const Color(0x2210B981),
-                        width: 1.2,
+            // Scan overlay (frame + scan line)
+            Center(
+              child: SizedBox(
+                width: viewfinderW,
+                height: viewfinderH,
+                child: Stack(
+                  children: [
+                    // Semi-transparent glass background
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0x660B1220),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(
+                            color: const Color(0x3310B981),
+                            width: 1.5,
+                          ),
+                        ),
                       ),
                     ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+
+                    // Corner frame painter
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _ScanFramePainter(
+                          color: const Color(0xFF10B981),
+                          radius: 22,
+                          stroke: 2.2,
                         ),
-                        SizedBox(width: 12),
-                        Text(
-                          'Extracting text…',
-                          style: TextStyle(fontSize: 13),
-                        ),
-                      ],
+                      ),
                     ),
+
+                    // Animated scan line
+                    AnimatedBuilder(
+                      animation: controller.scanCtrl,
+                      builder: (context, _) {
+                        final t = controller.scanCtrl.value;
+                        final top = lerpDouble(14, viewfinderH - 18, t)!;
+                        return Positioned(
+                          left: 16,
+                          right: 16,
+                          top: top,
+                          child: Container(
+                            height: 2,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(99),
+                              gradient: const LinearGradient(
+                                colors: [
+                                  Color(0x0010B981),
+                                  Color(0xFF10B981),
+                                  Color(0x0010B981),
+                                ],
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x5510B981),
+                                  blurRadius: 12,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    // Hint text
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 12,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0x99020617),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: const Color(0x22334B),
+                              width: 1,
+                            ),
+                          ),
+                          child: const Text(
+                            'Align text inside frame • Tap shutter to scan',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFFCBD5E1),
+                            ), // slate-300
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Bottom controls (upload + shutter)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+                  child: Row(
+                    children: [
+                      _RoundAction(
+                        icon: Icons.photo_library_outlined,
+                        size: 52,
+                        onTap: controller.pickFromGallery,
+                      ),
+                      const Spacer(),
+                      _ShutterButton(
+                        disabled: controller.isExtracting.value,
+                        onTap: controller.capture,
+                      ),
+                      const Spacer(),
+                      const SizedBox(
+                        width: 52,
+                      ), // keep symmetry like the web layout
+                    ],
                   ),
                 ),
               ),
             ),
-        ],
+
+            // Watermark-like error banner (web shows inline errors)
+            if (controller.error.value != null)
+              Positioned(
+                left: 16,
+                right: 16,
+                top: 86,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0B1220),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: const Color(0x33EF4444),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.error_outline,
+                        color: Color(0xFFEF4444),
+                        size: 18,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          controller.error.value!,
+                          style: const TextStyle(
+                            color: Color(0xFFFCA5A5),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: controller.clearError,
+                        icon: const Icon(
+                          Icons.close,
+                          size: 18,
+                          color: Color(0xFF94A3B8),
+                        ),
+                        splashRadius: 18,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Result panel overlay (matches the web bottom overlay)
+            if (controller.currentText.value != null &&
+                controller.currentImagePath.value != null)
+              _ResultOverlay(
+                text: controller.currentText.value!,
+                imagePath: controller.currentImagePath.value!,
+                onClose: controller.closeResult,
+                onCopy: () async {
+                  await Clipboard.setData(
+                    ClipboardData(text: controller.currentText.value!),
+                  );
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Copied to clipboard'),
+                      duration: Duration(milliseconds: 900),
+                    ),
+                  );
+                },
+              ),
+
+            // History drawer (right-side slide, like the web)
+            _HistoryDrawer(
+              open: controller.historyOpen.value,
+              controller: controller.historySearch,
+              items: controller.filteredHistory,
+              onClose: controller.closeHistory,
+              onPick: controller.selectHistoryItem,
+              onClearAll: controller.clearAllHistory,
+            ),
+
+            // Processing overlay
+            if (controller.isExtracting.value)
+              Positioned.fill(
+                child: Container(
+                  color: const Color(0x99020617),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0B1220),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0x2210B981),
+                          width: 1.2,
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 12),
+                          Text(
+                            'Extracting text…',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1103,7 +762,6 @@ class _HistoryDrawer extends StatelessWidget {
                       color: Color(0xFF94A3B8),
                     ),
                   ),
-                  onChanged: (_) => (context as Element).markNeedsBuild(),
                 ),
               ),
               const Divider(height: 1, color: Color(0x1E334B)),
@@ -1115,83 +773,91 @@ class _HistoryDrawer extends StatelessWidget {
                           style: TextStyle(color: Color(0xFF94A3B8)),
                         ),
                       )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                        itemBuilder: (context, i) {
-                          final it = items[i];
-                          return InkWell(
-                            borderRadius: BorderRadius.circular(14),
-                            onTap: () => onPick(it),
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF020617),
+                    : GetBuilder<OcrController>(
+                        id: 'history_list',
+                        builder: (controller) {
+                          final filtered = controller.filteredHistory;
+                          return ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                            itemBuilder: (context, i) {
+                              final it = filtered[i];
+                              return InkWell(
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: const Color(0x1E334B),
-                                  width: 1,
-                                ),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: Container(
-                                      width: 52,
-                                      height: 52,
-                                      color: const Color(0xFF0B1220),
-                                      child: Image.file(
-                                        File(it.imagePath),
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) =>
-                                            const Center(
-                                              child: Icon(
-                                                Icons.image_outlined,
-                                                size: 18,
+                                onTap: () => onPick(it),
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF020617),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: const Color(0x1E334B),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Container(
+                                          width: 52,
+                                          height: 52,
+                                          color: const Color(0xFF0B1220),
+                                          child: Image.file(
+                                            File(it.imagePath),
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) =>
+                                                const Center(
+                                                  child: Icon(
+                                                    Icons.image_outlined,
+                                                    size: 18,
+                                                    color: Color(0xFF94A3B8),
+                                                  ),
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              it.preview,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                height: 1.25,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              df.format(
+                                                DateTime.fromMillisecondsSinceEpoch(
+                                                  it.timestampMs,
+                                                ),
+                                              ),
+                                              style: const TextStyle(
+                                                fontSize: 11.5,
                                                 color: Color(0xFF94A3B8),
                                               ),
                                             ),
+                                          ],
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          it.preview,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            height: 1.25,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          df.format(
-                                            DateTime.fromMillisecondsSinceEpoch(
-                                              it.timestampMs,
-                                            ),
-                                          ),
-                                          style: const TextStyle(
-                                            fontSize: 11.5,
-                                            color: Color(0xFF94A3B8),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                                ),
+                              );
+                            },
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
+                            itemCount: filtered.length,
                           );
                         },
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemCount: items.length,
                       ),
               ),
             ],

@@ -1,0 +1,19 @@
+﻿Analyzing flutter_text_ocr...                                   
+
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:251:50 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:453:51 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:502:49 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:607:51 - use_full_hex_values_for_flutter_colors
+   info - Unnecessary use of multiple underscores - lib\main.dart:625:45 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\main.dart:625:49 - unnecessary_underscores
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:695:51 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:746:65 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:750:65 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:767:53 - use_full_hex_values_for_flutter_colors
+   info - Instances of 'Color' should be created using an 8-digit hexadecimal integer (such as '0xFFFFFFFF') - lib\main.dart:793:58 - use_full_hex_values_for_flutter_colors
+   info - Unnecessary use of multiple underscores - lib\main.dart:810:63 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\main.dart:810:67 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\main.dart:856:51 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:887:23 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:898:23 - deprecated_member_use
+
