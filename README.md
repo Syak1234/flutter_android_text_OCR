@@ -73,4 +73,4 @@ This application is designed to simplify how you interact with physical text. He
 > This app requires Camera and Storage permissions to function correctly. Ensure you grant these permissions when prompted on the first launch.
 
 ---
-*Created with ❤️ for seamless text extraction.*
+*Created with ❤️ for seamless text extraction.(Sayak Mishra)*
