@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widget_previews.dart';
 import 'package:flutter_text_ocr/main.dart';
 import 'package:flutter_text_ocr/widget/buttonwidget.dart';
 import 'package:get/get.dart';
@@ -12,6 +13,10 @@ import '../ocr_controller.dart';
 
 class OcrHomePage extends StatelessWidget {
   const OcrHomePage({super.key});
+  @Preview(name: "OcrHomePage")
+  static Widget preview() {
+    return const OcrHomePage();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -110,7 +115,7 @@ class OcrHomePage extends StatelessWidget {
                     const SizedBox(width: 13),
                     const Expanded(
                       child: Text(
-                        'Free Lens OCR',
+                        'Text R Copy',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,

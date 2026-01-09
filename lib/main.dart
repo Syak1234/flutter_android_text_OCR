@@ -37,7 +37,7 @@ class FreeLensOcrApp extends StatelessWidget {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Free Lens OCR',
+      title: 'Text R Copy',
       theme: base.copyWith(
         scaffoldBackgroundColor: const Color(0xFF020617), // slate-950
         textTheme: GoogleFonts.interTextTheme(base.textTheme).apply(
